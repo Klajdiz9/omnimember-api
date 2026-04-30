@@ -1,0 +1,87 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Brand {
+  id        String   @id @default(cuid())
+  name      String
+  slug      String   @unique
+  createdAt DateTime @default(now())
+
+  members       Member[]
+  subscriptions Subscription[]
+  checkins      Checkin[]
+  users         User[]
+}
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  role         Role     @default(STAFF)
+  brandId      String
+  brand        Brand    @relation(fields: [brandId], references: [id])
+  createdAt    DateTime @default(now())
+}
+
+model Member {
+  id        String   @id @default(cuid())
+  firstName String
+  lastName  String
+  email     String
+  phone     String?
+  brandId   String
+  brand     Brand    @relation(fields: [brandId], references: [id])
+  createdAt DateTime @default(now())
+
+  subscriptions Subscription[]
+  checkins      Checkin[]
+
+  @@unique([email, brandId])
+}
+
+model Subscription {
+  id        String             @id @default(cuid())
+  memberId  String
+  brandId   String
+  type      SubscriptionType
+  status    SubscriptionStatus @default(ACTIVE)
+  startDate DateTime
+  endDate   DateTime
+  member    Member             @relation(fields: [memberId], references: [id])
+  brand     Brand              @relation(fields: [brandId], references: [id])
+  createdAt DateTime           @default(now())
+}
+
+model Checkin {
+  id        String   @id @default(cuid())
+  memberId  String
+  brandId   String
+  checkedAt DateTime @default(now())
+  member    Member   @relation(fields: [memberId], references: [id])
+  brand     Brand    @relation(fields: [brandId], references: [id])
+}
+
+enum Role {
+  ADMIN
+  STAFF
+}
+
+enum SubscriptionType {
+  MONTHLY
+  QUARTERLY
+  ANNUAL
+  DAY_PASS
+  VIP
+}
+
+enum SubscriptionStatus {
+  ACTIVE
+  EXPIRED
+  SUSPENDED
+}
