@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OmniMember | Live Monitor</title>
+    <link rel="stylesheet" href="/css/style.css">
+    <style>
+        .logout-btn {
+            background: none;
+            border: 1px solid var(--glass-border);
+            color: var(--text-secondary);
+            padding: 8px 16px;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        .logout-btn:hover {
+            color: white;
+            border-color: white;
+        }
+        .debug-panel {
+            margin-top: auto;
+            padding: 20px;
+            border-top: 1px solid var(--glass-border);
+        }
+        .simulate-btn {
+            width: 100%;
+            padding: 10px;
+            background: rgba(255,255,255,0.05);
+            border: 1px dashed var(--accent-color);
+            color: var(--accent-color);
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 0.8rem;
+        }
+    </style>
+</head>
+<body>
+    <header class="dashboard-header glass">
+        <div class="logo">OMNIMEMBER <span style="font-weight: 300; font-size: 0.8rem; margin-left: 10px; color: var(--text-secondary);">LIVE MONITOR</span></div>
+        <div style="flex-grow: 1; display: flex; justify-content: center;">
+            <select id="gymSwitcher" class="logout-btn" style="background: rgba(255,255,255,0.1); border-color: var(--accent-color); color: var(--accent-color);">
+                <!-- Gyms will be loaded here -->
+            </select>
+        </div>
+        <div class="status-indicator">
+            <div id="wsDot" class="dot"></div>
+            <span id="wsStatus">Disconnected</span>
+            <button id="logoutBtn" class="logout-btn" style="margin-left: 20px;">Logout</button>
+        </div>
+    </header>
+
+    <main class="main-content">
+        <section class="feed-section">
+            <h2 id="brandTitle">Activity Feed</h2>
+            <div id="checkinList" class="checkin-list">
+                <!-- Check-ins will appear here -->
+                <div class="checkin-card glass" id="emptyState">
+                    <p style="color: var(--text-secondary); width: 100%; text-align: center;">Waiting for incoming check-ins...</p>
+                </div>
+            </div>
+        </section>
+
+        <section class="stats-section">
+            <div class="stat-card glass">
+                <div class="stat-value" id="totalCheckins">0</div>
+                <div class="stat-label">Today's Check-ins</div>
+            </div>
+
+            <div class="stat-card glass">
+                <div class="stat-value" id="peopleInside">0</div>
+                <div class="stat-label">People Inside</div>
+            </div>
+
+            <div class="stat-card glass" style="padding: 15px;">
+                <p style="font-size: 0.7rem; color: var(--text-secondary); margin-bottom: 10px; text-transform: uppercase;">Technical Stream</p>
+                <div id="eventStream" style="height: 150px; background: rgba(0,0,0,0.3); border-radius: 8px; padding: 10px; font-family: 'Courier New', monospace; font-size: 0.7rem; overflow-y: auto; color: var(--accent-color); text-align: left;">
+                    > Waiting for WS events...
+                </div>
+            </div>
+
+            <div class="debug-panel glass">
+                <p style="font-size: 0.7rem; color: var(--text-secondary); margin-bottom: 10px; text-transform: uppercase;">Simulation Hub</p>
+                
+                <div style="margin-bottom: 15px;">
+                    <label style="font-size: 0.6rem; color: var(--text-secondary); display: block; margin-bottom: 5px;">Pick Member for Entry:</label>
+                    <select id="memberPicker" class="simulate-btn" style="text-align: left; background: rgba(0,0,0,0.2); border-style: solid;">
+                        <option value="">Loading members...</option>
+                    </select>
+                </div>
+
+                <div style="margin-bottom: 15px;">
+                    <label style="font-size: 0.6rem; color: var(--text-secondary); display: block; margin-bottom: 5px;">Pick Member for Exit:</label>
+                    <select id="exitPicker" class="simulate-btn" style="text-align: left; background: rgba(0,0,0,0.2); border-style: solid; border-color: #00d1ff; color: #00d1ff;">
+                        <option value="">No one inside</option>
+                    </select>
+                </div>
+
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+                    <button id="simulateBtn" class="simulate-btn" style="border-style: solid; background: rgba(0, 255, 102, 0.1);">ENTER</button>
+                    <button id="simulateDeniedBtn" class="simulate-btn" style="border-color: var(--error-color); color: var(--error-color);">DENY</button>
+                </div>
+                <button id="simulateExitBtn" class="simulate-btn" style="margin-top: 10px; border-style: solid; border-color: #00d1ff; color: #00d1ff; background: rgba(0, 209, 255, 0.1);">CHECK-OUT SELECTED</button>
+            </div>
+        </section>
+    </main>
+
+    <script>
+        let token = localStorage.getItem('gt_token');
+        let brand = JSON.parse(localStorage.getItem('gt_brand') || '{}');
+        let socket;
+        let checkinCount = 0;
+
+        if (!token) window.location.href = '/dashboard/login';
+
+        // Initialization
+        async function initDashboard() {
+            document.getElementById('brandTitle').textContent = `Live Feed: ${brand.name}`;
+            await loadGyms();
+            await loadMembers();
+            await loadPresence();
+            if (socket) socket.close();
+            connectWS();
+        }
+
+        async function loadGyms() {
+            const res = await fetch('/api/brands', { headers: { 'Authorization': `Bearer ${token}` } });
+            const gyms = await res.json();
+            const switcher = document.getElementById('gymSwitcher');
+            switcher.innerHTML = gyms.map(g => `<option value="${g.id}" ${g.id === brand.id ? 'selected' : ''}>${g.name}</option>`).join('');
+        }
+
+        async function loadMembers() {
+            const res = await fetch('/api/members', { headers: { 'Authorization': `Bearer ${token}` } });
+            const result = await res.json();
+            const picker = document.getElementById('memberPicker');
+            picker.innerHTML = result.data.map(m => `<option value="${m.id}">${m.firstName} ${m.lastName}</option>`).join('');
+        }
+
+        async function loadPresence() {
+            const res = await fetch('/api/checkins/presence', { headers: { 'Authorization': `Bearer ${token}` } });
+            const list = await res.json();
+            const picker = document.getElementById('exitPicker');
+            picker.innerHTML = list.length > 0 
+                ? list.map(m => `<option value="${m.id}">${m.firstName} ${m.lastName}</option>`).join('')
+                : '<option value="">No one inside</option>';
+            
+            const countRes = await fetch('/api/checkins/presence/count', { headers: { 'Authorization': `Bearer ${token}` } });
+            const countData = await countRes.json();
+            document.getElementById('peopleInside').textContent = countData.count;
+        }
+
+        async function switchGym(brandId) {
+            const res = await fetch('/api/brands/switch', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+                body: JSON.stringify({ brandId })
+            });
+            const data = await res.json();
+            if (data.accessToken) {
+                token = data.accessToken;
+                brand = data.brand;
+                localStorage.setItem('gt_token', token);
+                localStorage.setItem('gt_brand', JSON.stringify(brand));
+                logEvent('SYSTEM', `Switched to ${brand.name}`);
+                
+                // Clear feed for visual clarity on switch
+                document.getElementById('checkinList').innerHTML = '<div class="checkin-card glass" id="emptyState"><p style="color: var(--text-secondary); width: 100%; text-align: center;">Waiting for incoming check-ins...</p></div>';
+                checkinCount = 0;
+                document.getElementById('totalCheckins').textContent = '0';
+                
+                initDashboard();
+            }
+        }
+
+        function connectWS() {
+            const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const wsUrl = `${wsProtocol}//${window.location.host}/ws?token=${token}`;
+            socket = new WebSocket(wsUrl);
+
+            socket.onopen = () => {
+                document.getElementById('wsDot').classList.add('online');
+                document.getElementById('wsStatus').textContent = 'Live System Connected';
+                logEvent('SYSTEM', `WebSocket connected to ${brand.name}`);
+            };
+
+            socket.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+                logEvent('INCOMING', JSON.stringify(data, null, 2));
+                
+                const payload = data.payload;
+                if (!payload) return;
+
+                if (payload.presenceCount !== undefined) {
+                    document.getElementById('peopleInside').textContent = payload.presenceCount;
+                }
+
+                if (payload.isCheckout) {
+                    logEvent('CHECKOUT', `${payload.memberName} left the building`);
+                    loadPresence(); // Refresh the exit picker
+                } else {
+                    addCheckinToFeed(payload);
+                    loadPresence(); // Refresh the exit picker
+                }
+            };
+
+            socket.onclose = () => {
+                document.getElementById('wsDot').classList.remove('online');
+                document.getElementById('wsStatus').textContent = 'Disconnected';
+                setTimeout(connectWS, 3000);
+            };
+        }
+
+        function logEvent(type, msg) {
+            const stream = document.getElementById('eventStream');
+            const entry = document.createElement('div');
+            entry.style.marginBottom = '8px';
+            entry.innerHTML = `<span style="color: #fff">[${type}]</span> ${msg}`;
+            stream.prepend(entry);
+        }
+
+        function addCheckinToFeed(checkin) {
+            const list = document.getElementById('checkinList');
+            const emptyState = document.getElementById('emptyState');
+            if (emptyState) emptyState.remove();
+
+            checkinCount++;
+            document.getElementById('totalCheckins').textContent = checkinCount;
+            
+            const card = document.createElement('div');
+            card.className = 'checkin-card glass';
+            const isVIP = checkin.subscriptionType === 'VIP';
+            if (isVIP && checkin.subscriptionValid) {
+                card.style.borderColor = '#ffcc00';
+                card.style.boxShadow = '0 0 15px rgba(255, 204, 0, 0.2)';
+            }
+            if (!checkin.subscriptionValid) card.style.borderColor = 'var(--error-color)';
+            
+            const initials = checkin.memberName ? checkin.memberName.split(' ').map(n => n[0]).join('') : '??';
+            const statusText = checkin.subscriptionValid ? (isVIP ? 'VIP VALID' : 'VALID') : 'EXPIRED';
+            const statusClass = checkin.subscriptionValid ? 'valid' : 'expired';
+            const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+            const color = isVIP ? '#ffcc00' : ['#00ff66', '#00d1ff', '#ff00ff', '#ffcc00', '#ff3333'][checkin.memberName.length % 5];
+
+            card.innerHTML = `
+                <div class="member-info">
+                    <div class="avatar" style="background: ${!checkin.subscriptionValid ? 'var(--error-color)' : color}">${initials}</div>
+                    <div>
+                        <div class="member-name">${checkin.memberName} ${isVIP ? '👑' : ''}</div>
+                        <div class="member-brand"><span style="color: var(--accent-color)">${checkin.brandName}</span> • ${time}</div>
+                        <div style="font-size: 0.7rem; color: var(--text-secondary); margin-top: 4px;">
+                            Sub: ${checkin.subscriptionType} • ID: ${checkin.memberId.substring(0,12)}...
+                        </div>
+                    </div>
+                </div>
+                <div class="status-badge ${statusClass}" style="${isVIP ? 'background: #ffcc00; color: #000' : ''}">${statusText}</div>
+            `;
+            list.prepend(card);
+            if (list.children.length > 10) list.removeChild(list.lastChild);
+        }
+
+        // Simulation Actions
+        document.getElementById('simulateBtn').addEventListener('click', () => runEntry(false));
+        document.getElementById('simulateDeniedBtn').addEventListener('click', () => runEntry(true));
+        document.getElementById('simulateExitBtn').addEventListener('click', runExit);
+        document.getElementById('gymSwitcher').addEventListener('change', (e) => switchGym(e.target.value));
+
+        async function runEntry(forceExpired) {
+            const memberId = document.getElementById('memberPicker').value;
+            if (!memberId) return;
+            const res = await fetch('/api/checkins', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+                body: JSON.stringify({ memberId, _mockExpired: forceExpired })
+            });
+            if (!res.ok) {
+                const data = await res.json();
+                logEvent('DENIED', data.error);
+            }
+        }
+
+        async function runExit() {
+            const memberId = document.getElementById('exitPicker').value;
+            if (!memberId) return;
+            const res = await fetch('/api/checkins/checkout', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+                body: JSON.stringify({ memberId })
+            });
+            if (!res.ok) {
+                const data = await res.json();
+                logEvent('ERROR', data.error);
+            }
+        }
+
+        document.getElementById('logoutBtn').addEventListener('click', () => {
+            localStorage.clear();
+            window.location.href = '/dashboard/login';
+        });
+
+        initDashboard();
+    </script>
+</body>
+</html>
